@@ -1,0 +1,42 @@
+name: Verify DispatchLab
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify planner and language intake
+        run: node --test tests/planner.test.mjs
+      - name: Prepare browser
+        run: |
+          npm install --no-save --package-lock=false --ignore-scripts --no-fund --no-audit playwright-core@1.56.1
+          npx playwright-core install chromium
+      - name: Exercise the dispatch workflow
+        run: |
+          python3 -m http.server 8090 --bind 127.0.0.1 >/tmp/dispatchlab-http.log 2>&1 &
+          curl --retry 5 --retry-connrefused --silent --fail http://127.0.0.1:8090/ >/dev/null
+          node tests/browser.mjs
+      - name: Exercise the published demo
+        if: github.event_name == 'push' && github.repository == 'dam1rgt3/dispatchlab'
+        env:
+          DEMO_URL: https://dam1rgt3.github.io/dispatchlab/
+        run: |
+          for attempt in $(seq 1 36); do
+            if curl --fail --silent "${DEMO_URL}src/app.mjs?commit=${GITHUB_SHA}" -o /tmp/published-app && cmp --silent src/app.mjs /tmp/published-app; then
+              node tests/browser.mjs
+              exit 0
+            fi
+            sleep 8
+          done
+          echo "The published app did not match this revision within the deployment window."
+          exit 1
